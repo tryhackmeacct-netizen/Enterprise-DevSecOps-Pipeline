@@ -9,11 +9,11 @@
 // 1. VULNERABLE CODE (BEFORE)
 // ==========================================
 function connectToExternalPaymentAPIVulnerable() {
-  // DANGER: Sensitive API token hardcoded directly in the source file.
-  // This credential will be committed to git repositories, potentially leaked to
-  // open-source mirrors, backups, CI logs, or developers who shouldn't have access.
-  const apiSecretKey = "sk_DEMO_HARDCODED_STRIPE_KEY";
-  
+  // REMEDIATED: Do not hardcode secrets. Retrieve from environment instead.
+  const apiSecretKey = process.env.PAYMENT_API_SECRET_KEY;
+  if (!apiSecretKey) {
+    throw new Error('Missing environment variable: PAYMENT_API_SECRET_KEY');
+  }
   return mockConnect(apiSecretKey);
 }
 
