@@ -6,12 +6,14 @@ ENV NODE_ENV=${NODE_ENV}
 
 WORKDIR /usr/src/app
 
+RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/* && npm install -g npm@10.9.2 --unsafe-perm
+
 # Copy package manifest first to leverage Docker layer cache for deps
 COPY package*.json ./
 
 # Install only production dependencies to keep builder minimal.
 # Use package-lock.json when present for deterministic installs.
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev; else npm install --omit=dev; fi && npm cache clean --force && chown -R node:node /usr/src/app
+RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --fund=false; else npm install --omit=dev --no-audit --fund=false; fi && npm cache clean --force && chown -R node:node /usr/src/app
 
 # Copy application source code after installing deps (better cache behavior)
 COPY src/ ./src/
@@ -30,6 +32,8 @@ ENV NODE_ENV=production
 ENV PORT=3000
 
 WORKDIR /usr/src/app
+
+RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/* && npm install -g npm@10.9.2 --unsafe-perm
 
 # Copy only required artifacts from builder to keep runtime image small
 COPY --from=builder /usr/src/app/package*.json ./

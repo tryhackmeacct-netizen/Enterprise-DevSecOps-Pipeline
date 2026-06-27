@@ -1,56 +1,48 @@
 # Enterprise E-commerce DevSecOps Pipeline — Week 1
 
-This repository implements Week 1 deliverables: secure containerization and SAST integration (SonarQube/SonarCloud) for a sample e-commerce Node.js app.
+This repository implements a sample e-commerce application with a full DevSecOps pipeline for Enterprise IaC deployment.
 
 **Contents**
 - `src/` — application source
 - `tests/` — unit/integration tests (Jest + Supertest)
-- `Dockerfile` — multi-stage, hardened image
-- `.github/workflows/ci.yml` — CI pipeline (build, test, SAST)
-- `sonar-project.properties` — Sonar scanner configuration (placeholders)
+- `Dockerfile` — multi-stage, hardened runtime image
+- `.github/workflows/ci.yml` — CI pipeline with build, test, SAST, SCA, container scanning, and IaC scanning
+- `infra/terraform/` — sample Terraform configuration for IaC scanning
+- `sonar-project.properties` — Sonar scanner configuration
 
-## Week 1 Architecture
+## Pipeline Architecture
 
-- Application: Node.js Express app serving a small in-memory catalog and checkout flow.
-- Containerization: Multi-stage Dockerfile producing a minimal runtime image and running as non-root.
-- CI: GitHub Actions pipeline executes tests, builds image, runs npm audit, and conditionally performs Sonar SAST scan with Quality Gate enforcement.
+This project delivers a layered security pipeline aligned to the e-commerce enterprise IaC use case:
 
-## Docker Workflow (what the `Dockerfile` does)
+- SAST: SonarQube/SonarCloud code analysis for code quality and OWASP-related issues.
+- SCA: `npm audit` plus Trivy checks for dependency vulnerabilities.
+- Container Scanning: Trivy scans the built Docker image for OS and library CVEs.
+- IaC Scanning: Checkov inspects Terraform files to catch cloud misconfigurations before deployment.
 
-- Builder stage installs production dependencies and copies source files.
-- Runtime stage copies only artifacts needed to run the app (package manifest, `node_modules`, and `src`).
-- Image metadata labels added: title, description, license, version.
-- Runs as non-root (`node`) and includes a `HEALTHCHECK` probing `/health`.
+## CI/CD Workflow
 
-Security controls implemented in the Dockerfile:
-- Minimal base image (Alpine-based official Node image).
-- Install only production dependencies (`npm install --omit=dev`) and clean npm cache.
-- Ensure non-root ownership of application files and run as non-root user.
-- Reduce image layers and copied artifacts to minimize attack surface.
+The GitHub Actions workflow defined in `.github/workflows/ci.yml` executes the following stages:
 
-## GitHub Actions workflow (`.github/workflows/ci.yml`)
-
-Pipeline stages (with comments in the workflow file):
-
-- Checkout: fetch-depth=0 to allow Sonar to collect SCM information.
-- Setup Node.js: Node 20 with npm cache enabled.
-- Install Dependencies: uses `npm ci` when `package-lock.json` is present, else `npm install`.
-- Run Unit Tests: `npm test` (collects coverage into `coverage/`).
-- Fail on npm audit (high): `npm audit --audit-level=high` — fails pipeline on high/critical vulnerabilities.
-- Build Docker Image: Build locally with `docker/build-push-action` for verification.
-- Sonar SAST Scan (conditional): runs only if `SONAR_TOKEN` is set in Secrets. The scanner will be run with `-Dsonar.qualitygate.wait=true` so the job fails if the quality gate is not GREEN.
-- Artifacts: test coverage and pipeline summary uploaded as workflow artifacts.
+1. Checkout repository with full Git history for analysis.
+2. Install and verify Node.js dependencies.
+3. Run unit tests and coverage.
+4. Fail fast on critical/high `npm audit` findings.
+5. Build the Docker image locally.
+6. Scan the source tree and Docker image with Trivy.
+7. Scan `infra/terraform` with Checkov.
+8. Run Sonar scan when `SONAR_TOKEN` is configured.
+9. Upload coverage and pipeline summary artifacts.
 
 ## SonarQube / SonarCloud Integration
 
-- `sonar-project.properties` contains placeholders for `sonar.projectKey` and `sonar.organization`.
-- Configure the following repository secrets in GitHub to enable full SAST enforcement:
-  - `SONAR_TOKEN` — Sonar authentication token (required)
-  - `SONAR_PROJECT_KEY` — project key (optional if configured in properties)
-  - `SONAR_ORGANIZATION` — SonarCloud organization (if using SonarCloud)
-  - `SONAR_HOST_URL` — Sonar server URL (defaults to SonarCloud when empty)
+The repository supports optional Sonar scanning. Configure these secrets in GitHub to enable full SAST enforcement:
 
-When `SONAR_TOKEN` is present, the CI pipeline will perform a Sonar scan and block merges if the configured Quality Gate fails.
+- `SONAR_TOKEN` — Sonar authentication token (required for scan step)
+- `SONAR_PROJECT_KEY` — Sonar project key
+- `SONAR_ORGANIZATION` — SonarCloud organization
+- `SONAR_HOST_URL` — Sonar server URL (defaults to SonarCloud when empty)
+
+When `SONAR_TOKEN` is present, the pipeline waits for the Sonar quality gate result and fails if the gate is not green.
 
 ## How to run locally
 
@@ -65,169 +57,32 @@ Build the Docker image locally:
 
 ```bash
 docker build -t ecommerce-app:local .
-docker run --rm -p 3000:3000 ecommerce-app:local
 ```
 
-## Remaining manual steps to enable full SAST enforcement
+Scan the application with Trivy locally:
 
-1. Create a Sonar project (SonarCloud or on-prem SonarQube).
-2. Set the repository secrets listed above.
-3. Optionally tune the Quality Gate and rules (OWASP-related rules can be enabled via Sonar Quality Profiles).
-
-## Week 1 Completion
-
-This repository satisfies Week 1 objectives: secure containerization, passing unit tests, CI workflow with SAST integration and Quality Gate enforcement (conditional on Sonar secrets). See `docs/pipeline-report.txt` (generated by the workflow) for automatic run summaries.
-
-## Multi-Layer Security CI (added)
-
-This repository now includes a consolidated GitHub Actions workflow that enforces multi-layer security checks on every push and pull request. The workflow is located at `.github/workflows/ci-security.yml` and performs the following checks in sequence:
-
-- Checkout, install, and run unit tests.
-- SCA: `npm audit` — the job fails on high or critical vulnerabilities.
-- Container build: builds the Docker image using the repository context.
-- Container scanning: Trivy scans the built image for CVEs.
-- SAST: SonarCloud/SonarQube scan (runs only if `SONAR_TOKEN` secret is configured).
-- IaC scanning: Checkov scans `infra/terraform` for common cloud misconfigurations.
-
-Repository secrets required for full enforcement:
-
-- `SONAR_TOKEN` — SonarCloud / SonarQube token (required for Sonar scan).
-
-Running scanners locally:
-
-Trivy (container):
 ```bash
-# build the image then scan
-docker build -t ecommerce-app:local .
-trivy image ecommerce-app:local
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasecurity/trivy image --exit-code 1 --severity CRITICAL,HIGH ecommerce-app:local
 ```
 
-Checkov (IaC):
+Run a Terraform IaC scan locally with Checkov:
+
 ```bash
 pip install checkov
 checkov -d infra/terraform
 ```
 
-Sonar scan (locally, when needed):
-```bash
-# requires sonar-scanner installed and SONAR_TOKEN set in env
-sonar-scanner -Dsonar.login=$SONAR_TOKEN
-```
+## Security Compliance
 
-Next steps:
+This repository is designed to enforce strict failure gates for critical issues:
 
-- Configure `SONAR_TOKEN` in your repository/secrets to enable Quality Gate enforcement.
-- Optionally tune Checkov/Trivy rules to reduce noise for the demo infra.
+- Critical/high dependency vulnerabilities fail CI.
+- Trivy image or filesystem findings fail CI.
+- Checkov IaC misconfigurations fail CI.
+- Sonar quality gate failures fail CI when enabled.
 
-## Week 2 — SCA, Container & IaC Scanning
+## Notes
 
-This repository implements Week 2 automation and enforcement for multi-layer security checks.
-
-- Software Composition Analysis (SCA): `npm audit` runs in CI and the job fails on HIGH/CRITICAL vulnerabilities. The workflow uploads `audit.json` for triage.
-- Container Scanning: Trivy scans the built image and repository filesystem and produces JSON reports. The CI job is configured to fail when HIGH/CRITICAL CVEs are found.
-- IaC Scanning: Checkov scans Terraform code in `infra/terraform` and produces `checkov-report.json`. The CI job fails if Checkov finds policy violations.
-
-Local scan commands:
-
-Trivy (filesystem):
-```bash
-# macOS
-brew install aquasecurity/trivy/trivy
-trivy fs -f json -o trivy-fs-report.json .
-```
-
-Trivy (image):
-```bash
-docker build -t ecommerce-app:local .
-trivy image -f json -o trivy-image-report.json ecommerce-app:local
-```
-
-Checkov (IaC):
-```bash
-pip install checkov
-checkov -d infra/terraform -o json > checkov-report.json
-```
-
-Troubleshooting:
-
-- If `docker` or `trivy` are not installed locally, use the GitHub Actions run artifacts for reports. The CI runner will execute container scans and upload JSON reports.
-- Set `SONAR_TOKEN` and other Sonar secrets in GitHub repository secrets to enable SAST quality gate enforcement.
-
-
-This repository implements Week 1 deliverables: secure containerization and SAST integration (SonarQube/SonarCloud) for a sample e-commerce Node.js app.
-
-**Contents**
-- `src/` — application source
-- `tests/` — unit/integration tests (Jest + Supertest)
-- `Dockerfile` — multi-stage, hardened image
-- `.github/workflows/ci.yml` — CI pipeline (build, test, SAST)
-- `sonar-project.properties` — Sonar scanner configuration (placeholders)
-
-## Week 1 Architecture
-
-- Application: Node.js Express app serving a small in-memory catalog and checkout flow.
-- Containerization: Multi-stage Dockerfile producing a minimal runtime image and running as non-root.
-- CI: GitHub Actions pipeline executes tests, builds image, runs npm audit, and conditionally performs Sonar SAST scan with Quality Gate enforcement.
-
-## Docker Workflow (what the `Dockerfile` does)
-
-- Builder stage installs production dependencies and copies source files.
-- Runtime stage copies only artifacts needed to run the app (package manifest, `node_modules`, and `src`).
-- Image metadata labels added: title, description, license, version.
-- Runs as non-root (`node`) and includes a `HEALTHCHECK` probing `/health`.
-
-Security controls implemented in the Dockerfile:
-- Minimal base image (Alpine-based official Node image).
-- Install only production dependencies (`npm install --omit=dev`) and clean npm cache.
-- Ensure non-root ownership of application files and run as non-root user.
-- Reduce image layers and copied artifacts to minimize attack surface.
-
-## GitHub Actions workflow (`.github/workflows/ci.yml`)
-
-Pipeline stages (with comments in the workflow file):
-
-- Checkout: fetch-depth=0 to allow Sonar to collect SCM information.
-- Setup Node.js: Node 20 with npm cache enabled.
-- Install Dependencies: uses `npm ci` when `package-lock.json` is present, else `npm install`.
-- Run Unit Tests: `npm test` (collects coverage into `coverage/`).
-- Fail on npm audit (high): `npm audit --audit-level=high` — fails pipeline on high/critical vulnerabilities.
-- Build Docker Image: Build locally with `docker/build-push-action` for verification.
-- Sonar SAST Scan (conditional): runs only if `SONAR_TOKEN` is set in Secrets. The scanner will be run with `-Dsonar.qualitygate.wait=true` so the job fails if the quality gate is not GREEN.
-- Artifacts: test coverage and pipeline summary uploaded as workflow artifacts.
-
-## SonarQube / SonarCloud Integration
-
-- `sonar-project.properties` contains placeholders for `sonar.projectKey` and `sonar.organization`.
-- Configure the following repository secrets in GitHub to enable full SAST enforcement:
-  - `SONAR_TOKEN` — Sonar authentication token (required)
-  - `SONAR_PROJECT_KEY` — project key (optional if configured in properties)
-  - `SONAR_ORGANIZATION` — SonarCloud organization (if using SonarCloud)
-  - `SONAR_HOST_URL` — Sonar server URL (defaults to SonarCloud when empty)
-
-When `SONAR_TOKEN` is present, the CI pipeline will perform a Sonar scan and block merges if the configured Quality Gate fails.
-
-## How to run locally
-
-Install dependencies and run tests:
-
-```bash
-npm install
-npm test
-```
-
-Build the Docker image locally:
-
-```bash
-docker build -t ecommerce-app:local .
-docker run --rm -p 3000:3000 ecommerce-app:local
-```
-
-## Remaining manual steps to enable full SAST enforcement
-
-1. Create a Sonar project (SonarCloud or on-prem SonarQube).
-2. Set the repository secrets listed above.
-3. Optionally tune the Quality Gate and rules (OWASP-related rules can be enabled via Sonar Quality Profiles).
-
-## Week 1 Completion
-
-This repository satisfies Week 1 objectives: secure containerization, passing unit tests, CI workflow with SAST integration and Quality Gate enforcement (conditional on Sonar secrets). See `docs/pipeline-report.txt` (generated by the workflow) for automatic run summaries.
+- `sonar-project.properties` includes default values for analysis and coverage reporting.
+- The Terraform sample in `infra/terraform` is intentionally included so the IaC scanner can detect misconfiguration patterns.
+- `docs/pipeline-report.txt` is generated by CI and contains pipeline status metadata.
