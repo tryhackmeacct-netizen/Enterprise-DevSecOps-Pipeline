@@ -1,4 +1,4 @@
-# Enterprise E-commerce DevSecOps Pipeline — Week 1
+# Enterprise E-commerce DevSecOps Pipeline — Complete Security Integration
 
 This repository implements a sample e-commerce application with a full DevSecOps pipeline for Enterprise IaC deployment.
 
