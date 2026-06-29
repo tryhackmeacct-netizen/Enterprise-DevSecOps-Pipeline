@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
+      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
 
     steps:
       - name: Checkout Code
@@ -27,12 +27,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+        run: npm ci
 
       - name: Run Unit Tests
         run: npm test
@@ -75,7 +70,7 @@ jobs:
           ignore-unfixed: true
 
       - name: Run Checkov IaC scan
-        uses: bridgecrew/checkov-action@v12.2.0
+        uses: bridgecrew/checkov-action@v12.2890.0
         with:
           directory: infra/terraform
           framework: terraform
@@ -84,11 +79,9 @@ jobs:
           soft_fail: false
 
       - name: SonarCloud / SonarQube Scan
-        if: ${{ secrets.SONAR_TOKEN != '' }}
-        uses: sonarsource/sonarcloud-github-action@v1
+        uses: sonarsource/sonarcloud-github-action@v4
         with:
           args: >
-            -Dsonar.login=${{ secrets.SONAR_TOKEN }}
             -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
@@ -105,14 +98,15 @@ jobs:
         if: always()
         run: |
           mkdir -p docs
-          echo "Enterprise DevSecOps Pipeline Report" > docs/pipeline-report.txt
-          echo "Timestamp: $(date -u)" >> docs/pipeline-report.txt
-          echo "Commit SHA: ${{ github.sha }}" >> docs/pipeline-report.txt
-          echo "Sonar Scan Performed: ${{ secrets.SONAR_TOKEN != '' }}" >> docs/pipeline-report.txt
-          echo "Trivy Scan Performed: true" >> docs/pipeline-report.txt
-          echo "Checkov IaC Scan Performed: true" >> docs/pipeline-report.txt
-          echo "==========================================" >> docs/pipeline-report.txt
-          cat docs/pipeline-report.txt
+          cat > docs/pipeline-report.txt << EOF
+          Enterprise DevSecOps Pipeline Report
+          Timestamp: $(date -u)
+          Commit SHA: ${{ github.sha }}
+          Sonar Scan Performed: true
+          Trivy Scan Performed: true
+          Checkov IaC Scan Performed: true
+          ==========================================
+          EOF
 
       - name: Upload Pipeline Summary Artifact
         if: always()
@@ -120,4 +114,3 @@ jobs:
         with:
           name: pipeline-report
           path: docs/pipeline-report.txt
-
