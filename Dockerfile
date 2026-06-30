@@ -6,25 +6,19 @@ ENV NODE_ENV=${NODE_ENV}
 
 WORKDIR /usr/src/app
 
-RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/* && npm install -g npm@10.9.2 --unsafe-perm
+RUN apk upgrade --no-cache
 
-# Copy package manifest first to leverage Docker layer cache for deps
 COPY package*.json ./
 
-# Install only production dependencies to keep builder minimal.
-# Use package-lock.json when present for deterministic installs.
-RUN if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --fund=false; else npm install --omit=dev --no-audit --fund=false; fi && npm cache clean --force && chown -R node:node /usr/src/app
+RUN npm ci --omit=dev --no-audit --fund=false && npm cache clean --force
 
-# Copy application source code after installing deps (better cache behavior)
 COPY src/ ./src/
-
-# Remove package manifests from the final image to reduce leak surface
 
 # Stage 2: Minimal Runtime
 FROM node:20-alpine AS runner
 
 LABEL org.opencontainers.image.title="Enterprise E-commerce DevSecOps Pipeline - App"
-LABEL org.opencontainers.image.description="Week 1: Containerized e-commerce sample with CI and SAST integration"
+LABEL org.opencontainers.image.description="Containerized e-commerce sample with CI and SAST integration"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.version="1.0.0"
 
@@ -33,25 +27,18 @@ ENV PORT=3000
 
 WORKDIR /usr/src/app
 
-RUN apk update && apk upgrade --no-cache && rm -rf /var/cache/apk/* && npm install -g npm@10.9.2 --unsafe-perm
+RUN apk upgrade --no-cache && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
-# Copy only required artifacts from builder to keep runtime image small
-COPY --from=builder /usr/src/app/package*.json ./
 COPY --from=builder /usr/src/app/node_modules ./node_modules
 COPY --from=builder /usr/src/app/src ./src
 
-# Ensure files are owned by non-root user
-RUN chown -R node:node /usr/src/app || true
+RUN chown -R node:node /usr/src/app
 
-# Expose target port
 EXPOSE 3000
 
-# Security: run as non-root user provided by the Node image
 USER node
 
-# Healthcheck: simple HTTP GET to the internal health endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
   CMD node -e "const http = require('http'); const req = http.request({ host: 'localhost', port: process.env.PORT || 3000, path: '/health', method: 'GET' }, (res) => { process.exit(res.statusCode === 200 ? 0 : 1); }); req.on('error', () => process.exit(1)); req.end();"
 
-# Minimal runtime command
 CMD ["node", "src/server.js"]
