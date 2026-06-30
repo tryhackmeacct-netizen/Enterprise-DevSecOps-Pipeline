@@ -29,3 +29,20 @@ Thumbs.db
 # Sonar Scanner workspace
 .scannerwork/
 .sonar/
+
+# Python virtual environment
+.venv/
+
+# Scan reports
+audit*.json
+*-report.json
+
+# Generated pipeline artifacts
+docs/
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+
+# ZAP
+.zap/
