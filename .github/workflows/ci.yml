@@ -56,7 +56,7 @@ jobs:
           tags: ecommerce-app:ci
 
       - name: Scan dependencies and local filesystem with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
@@ -68,7 +68,7 @@ jobs:
           skip-dirs: .venv
 
       - name: Scan container image with Trivy
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@master
         with:
           scan-type: image
           image-ref: ecommerce-app:ci
@@ -96,7 +96,7 @@ jobs:
         working-directory: infra/terraform
 
       - name: Run Checkov IaC Scan (Secure Infrastructure)
-        uses: bridgecrew/checkov-action@v12.2890.0
+        uses: bridgecrewio/checkov-action@master
         with:
           directory: infra/terraform
           framework: terraform
@@ -105,7 +105,7 @@ jobs:
           soft_fail: false
 
       - name: Run Checkov IaC Scan (Insecure Infrastructure - Demo)
-        uses: bridgecrew/checkov-action@v12.2890.0
+        uses: bridgecrewio/checkov-action@vmaster
         with:
           directory: infra/terraform-insecure
           framework: terraform
