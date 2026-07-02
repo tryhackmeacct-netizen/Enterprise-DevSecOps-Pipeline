@@ -1,4 +1,4 @@
-name: CI/CD Security Pipeline
+name: CI/CD DevSecOps Pipeline
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   security-pipeline:
-    name: Build, Test, SAST, SCA, Container, and IaC Scan
+    name: Build, Test, SAST, SCA, Container, IaC
     runs-on: ubuntu-latest
 
     env:
@@ -31,6 +31,15 @@ jobs:
 
       - name: Run Unit Tests
         run: npm test
+
+      - name: SonarCloud / SonarQube Scan
+        uses: sonarsource/sonarcloud-github-action@v4
+        with:
+          args: >
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.qualitygate.wait=true
 
       - name: Fail on critical vulnerabilities
         run: npm audit --audit-level=high
@@ -69,7 +78,24 @@ jobs:
           format: table
           ignore-unfixed: true
 
-      - name: Run Checkov IaC scan
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Terraform Init
+        run: terraform init -backend=false
+        working-directory: infra/terraform
+
+      - name: Terraform Format Check
+        run: terraform fmt -check -recursive
+        working-directory: infra/terraform
+
+      - name: Terraform Validate
+        run: terraform validate
+        working-directory: infra/terraform
+
+      - name: Run Checkov IaC Scan (Secure Infrastructure)
         uses: bridgecrew/checkov-action@v12.2890.0
         with:
           directory: infra/terraform
@@ -78,14 +104,15 @@ jobs:
           quiet: false
           soft_fail: false
 
-      - name: SonarCloud / SonarQube Scan
-        uses: sonarsource/sonarcloud-github-action@v4
+      - name: Run Checkov IaC Scan (Insecure Infrastructure - Demo)
+        uses: bridgecrew/checkov-action@v12.2890.0
         with:
-          args: >
-            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
-            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
-            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
-            -Dsonar.qualitygate.wait=true
+          directory: infra/terraform-insecure
+          framework: terraform
+          output_format: cli
+          quiet: false
+          soft_fail: true
+          skip_check: CKV_AWS_272
 
       - name: Upload Test Coverage Artifacts
         if: always()
@@ -105,6 +132,7 @@ jobs:
           Sonar Scan Performed: true
           Trivy Scan Performed: true
           Checkov IaC Scan Performed: true
+          Terraform Validated: true
           ==========================================
           EOF
 
