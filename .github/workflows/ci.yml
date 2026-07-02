@@ -1,4 +1,4 @@
-name: CI/CD Security Pipeline
+name: CI/CD DevSecOps Pipeline
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 jobs:
   security-pipeline:
-    name: Build, Test, SAST, SCA, Container, and IaC Scan
+    name: Build, Test, SAST, SCA, Container, IaC
     runs-on: ubuntu-latest
 
     env:
@@ -31,6 +31,15 @@ jobs:
 
       - name: Run Unit Tests
         run: npm test
+
+      - name: SonarCloud / SonarQube Scan
+        uses: sonarsource/sonarcloud-github-action@v4
+        with:
+          args: >
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.qualitygate.wait=true
 
       - name: Fail on critical vulnerabilities
         run: npm audit --audit-level=high
