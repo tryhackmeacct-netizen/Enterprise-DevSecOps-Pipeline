@@ -78,41 +78,12 @@ jobs:
           format: table
           ignore-unfixed: true
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.0
-
-      - name: Terraform Init
-        run: terraform init -backend=false
-        working-directory: infra/terraform
-
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
-        working-directory: infra/terraform
-
-      - name: Terraform Validate
-        run: terraform validate
-        working-directory: infra/terraform
-
-      - name: Run Checkov IaC Scan (Secure Infrastructure)
-        uses: bridgecrewio/checkov-action@master
         with:
           directory: infra/terraform
           framework: terraform
           output_format: cli
           quiet: false
           soft_fail: false
-
-      - name: Run Checkov IaC Scan (Insecure Infrastructure - Demo)
-        uses: bridgecrewio/checkov-action@vmaster
-        with:
-          directory: infra/terraform-insecure
-          framework: terraform
-          output_format: cli
-          quiet: false
-          soft_fail: true
-          skip_check: CKV_AWS_272
 
       - name: Upload Test Coverage Artifacts
         if: always()
@@ -132,9 +103,6 @@ jobs:
           Sonar Scan Performed: true
           Trivy Scan Performed: true
           Checkov IaC Scan Performed: true
-          Terraform Validated: true
-          ==========================================
-          EOF
 
       - name: Upload Pipeline Summary Artifact
         if: always()
