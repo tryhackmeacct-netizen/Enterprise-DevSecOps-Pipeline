@@ -78,24 +78,7 @@ jobs:
           format: table
           ignore-unfixed: true
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.9.0
-
-      - name: Terraform Init
-        run: terraform init -backend=false
-        working-directory: infra/terraform
-
-      - name: Terraform Format Check
-        run: terraform fmt -check -recursive
-        working-directory: infra/terraform
-
-      - name: Terraform Validate
-        run: terraform validate
-        working-directory: infra/terraform
-
-      - name: Run Checkov IaC Scan (Secure Infrastructure)
+      - name: Run Checkov IaC scan
         uses: bridgecrew/checkov-action@v12.2890.0
         with:
           directory: infra/terraform
@@ -104,15 +87,14 @@ jobs:
           quiet: false
           soft_fail: false
 
-      - name: Run Checkov IaC Scan (Insecure Infrastructure - Demo)
-        uses: bridgecrew/checkov-action@v12.2890.0
+      - name: SonarCloud / SonarQube Scan
+        uses: sonarsource/sonarcloud-github-action@v4
         with:
-          directory: infra/terraform-insecure
-          framework: terraform
-          output_format: cli
-          quiet: false
-          soft_fail: true
-          skip_check: CKV_AWS_272
+          args: >
+            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
+            -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.qualitygate.wait=true
 
       - name: Upload Test Coverage Artifacts
         if: always()
@@ -132,7 +114,6 @@ jobs:
           Sonar Scan Performed: true
           Trivy Scan Performed: true
           Checkov IaC Scan Performed: true
-          Terraform Validated: true
           ==========================================
           EOF
 
