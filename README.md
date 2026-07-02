@@ -1,4 +1,4 @@
-# Enterprise E-commerce DevSecOps Pipeline — Complete Security Integration
+# Enterprise E-commerce DevSecOps Pipeline
 
 A production-ready e-commerce API with a comprehensive DevSecOps pipeline integrating SAST, SCA, container scanning, and IaC scanning.
 
