@@ -42,6 +42,8 @@ docs/
 
 # Terraform
 infra/terraform/.terraform/
+*.tfstate
+*.tfstate.backup
 
 # ZAP
 .zap/

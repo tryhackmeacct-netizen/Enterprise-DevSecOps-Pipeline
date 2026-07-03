@@ -5,7 +5,9 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "test": "cross-env NODE_ENV=test jest --coverage"
+    "dev": "node --watch src/server.js",
+    "test": "cross-env NODE_ENV=test jest --coverage",
+    "test:coverage": "npm test"
   },
   "dependencies": {
     "express": "^4.22.2"
@@ -33,7 +35,6 @@
   },
   "private": true,
   "overrides": {
-    "body-parser": "^1.20.3",
     "js-yaml": "^5.1.0"
   }
 }
