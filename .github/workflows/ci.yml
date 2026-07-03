@@ -33,7 +33,7 @@ jobs:
         run: npm test
 
       - name: SonarCloud / SonarQube Scan
-        uses: sonarsource/sonarcloud-github-action@v4
+        uses: sonarsource/sonarcloud-github-action@v5
         with:
           args: >
             -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
@@ -105,7 +105,7 @@ jobs:
           soft_fail: false
 
       - name: Run Checkov IaC Scan (Insecure Infrastructure - Demo)
-        uses: bridgecrewio/checkov-action@vmaster
+        uses: bridgecrewio/checkov-action@master
         with:
           directory: infra/terraform-insecure
           framework: terraform
