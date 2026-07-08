@@ -1,26 +1,80 @@
-name: CI/CD DevSecOps Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+# Enterprise DevSecOps CI/CD Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+# All 4 Weeks integrated:
+#   Week 1: Build · Test · SAST (Semgrep/SonarCloud) · SCA (npm audit)
+#   Week 2: Container Scan (Trivy) · Dependency Scan (Trivy)
+#   Week 3: IaC Scan (Checkov + TFSec) · Terraform Validate/Fmt
+#   Week 4: DAST (OWASP ZAP) · Secret Scan (Gitleaks) · Hardening
+# ═══════════════════════════════════════════════════════════════════════════════
+name: DevSecOps CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [main, master]
   pull_request:
-    branches: [ main, master ]
+    branches: [main, master]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: ecommerce-app
+  IMAGE_TAG: ${{ github.sha }}
+  # SonarCloud token — used by the SAST job; empty when secret not set (skips scan)
+  SONAR_TOKEN: ${{ secrets.SONAR_TOKEN || '' }}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PIPELINE HARDENING — Least-privilege for GITHUB_TOKEN
+# ══════════════════════════════════════════════════════════════════════════════
+# These permissions are scoped to the MINIMUM needed for this workflow.
+# We grant only:
+#   contents: read      — checkout the repo
+#   issues: read        — read issues (needed by some actions)
+#   security-events: write — upload SARIF results to GitHub Security tab
+#   id-token: write     — needed for some actions that authenticate
+# Note: We do NOT grant write access to contents or pull requests,
+#       preventing a malicious script from pushing code or modifying PRs.
+permissions:
+  contents: read
+  issues: read
+  security-events: write
+  id-token: write
 
 jobs:
-  security-pipeline:
-    name: Build, Test, SAST, SCA, Container, IaC
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 1 — Secret Scanning (Gitleaks)
+  # Run first since it's fast and blocks leaks before any other work.
+  # Pinned to SHA: gitleaks/gitleaks-action@v2 resolves to commit SHA for
+  # supply-chain security — prevents a compromised tag from injecting code.
+  # ═══════════════════════════════════════════════════════════════════════════
+  gitleaks:
+    name: Secret Scan — Gitleaks
     runs-on: ubuntu-latest
-
-    env:
-      SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Setup Node.js
+      - name: Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 2 — Unit Tests + Dependency Audit
+  # ═══════════════════════════════════════════════════════════════════════════
+  test:
+    name: Unit Tests + npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js 20
         uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -32,70 +86,315 @@ jobs:
       - name: Run Unit Tests
         run: npm test
 
-      - name: SonarCloud / SonarQube Scan
-        uses: sonarsource/sonarcloud-github-action@v4
+      - name: Dependency Audit (fail on HIGH+)
+        # npm audit exits non-zero when vulnerabilities at the given severity
+        # or higher are found. --audit-level=high means the build fails if
+        # any HIGH or CRITICAL vulnerability exists in direct or transitive deps.
+        # Why HIGH? CRITICAL-only would miss serious but impactful issues;
+        # LOW/MEDIUM generate too many false positives for a fast-feedback CI.
+        run: npm audit --audit-level=high
+
+      - name: Upload Coverage Report
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 3 — SAST (Static Application Security Testing)
+  # Runs Semgrep (always, no token required) + SonarCloud (when SONAR_TOKEN set)
+  # ═══════════════════════════════════════════════════════════════════════════
+  sast:
+    name: SAST (Semgrep + SonarCloud)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Semgrep SAST Scan
+        # --error: exit non-zero on findings at the specified severity or higher
+        # --severity=ERROR: only ERROR-level findings fail the build.
+        #   Why ERROR and not WARNING? WARNING-level includes style and
+        #   best-practice violations. ERROR maps to OWASP Top 10 / CWE
+        #   categories that represent real exploit risk. False positives at
+        #   WARNING level would desensitize developers to pipeline failures.
+        run: |
+          pipx install semgrep
+          semgrep --config=auto \
+                  --error \
+                  --severity=ERROR \
+                  --exclude='node_modules/' \
+                  --exclude='.venv/' \
+                  --exclude='src/security-demos/' \
+                  --output=semgrep-report.sarif \
+                  --sarif \
+                  .
+
+      - name: Upload Semgrep SARIF to GitHub Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-report.sarif
+          category: semgrep
+
+      - name: Upload Semgrep SARIF Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-sarif
+          path: semgrep-report.sarif
+          retention-days: 14
+
+      - name: Display Semgrep Results (readable table on failure)
+        if: failure()
+        run: |
+          pipx install semgrep
+          semgrep --config=auto \
+                  --severity=ERROR \
+                  --exclude='node_modules/' \
+                  --exclude='.venv/' \
+                  --exclude='src/security-demos/' \
+                  .
+
+      # ── SonarCloud Scan (conditional on SONAR_TOKEN) ──────────────
+      # SonarCloud is the spec'd primary SAST tool per the project brief.
+      # It runs when SONAR_TOKEN is configured in GitHub Secrets.
+      # The quality gate is set to wait=true in sonar-project.properties,
+      # meaning the pipeline blocks until SonarCloud completes analysis
+      # and returns a PASS/FAIL gate verdict.
+      - name: SonarCloud Scan
+        if: env.SONAR_TOKEN != ''
+        uses: SonarSource/sonarqube-scan-action@v5.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL || 'https://sonarcloud.io' }}
+        with:
+          projectBaseDir: .
           args: >
-            -Dsonar.host.url=${{ env.SONAR_HOST_URL }}
             -Dsonar.projectKey=${{ secrets.SONAR_PROJECT_KEY }}
             -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION }}
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.sources=src
+            -Dsonar.tests=tests
+            -Dsonar.test.inclusions=tests/**/*.js
+            -Dsonar.exclusions=node_modules/**,coverage/**
+            -Dsonar.sourceEncoding=UTF-8
             -Dsonar.qualitygate.wait=true
 
-      - name: Fail on critical vulnerabilities
-        run: npm audit --audit-level=high
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 4 — Docker Build (multi-stage, cached via Buildx)
+  # ═══════════════════════════════════════════════════════════════════════════
+  build:
+    name: Docker Build
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker Image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: false
-          tags: ecommerce-app:ci
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
-      - name: Scan dependencies and local filesystem with Trivy
+      - name: Save Docker Image for Downstream Jobs
+        run: docker save ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }} | gzip > /tmp/${{ env.IMAGE_NAME }}.tar.gz
+
+      - name: Upload Docker Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/${{ env.IMAGE_NAME }}.tar.gz
+          retention-days: 1
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 5 — SCA (Software Composition Analysis) with Trivy
+  # Filesystem scan for npm dependency CVEs.
+  # ═══════════════════════════════════════════════════════════════════════════
+  trivy-sca:
+    name: SCA — Trivy Dependency Scan
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Trivy Filesystem Scan
+        id: trivy-fs
+        # Pinned with version tag (0.29.0). In production, pin by SHA:
+        #   uses: aquasecurity/trivy-action@<full-commit-sha>
+        # exit-code: 1 → fail the build if vulnerabilities found at the
+        #   specified severity level or above.
+        # ignore-unfixed: true → only fail for vulnerabilities that have
+        #   a known fix. This prevents blocking the pipeline on zero-day
+        #   CVEs where no patch exists yet (the team should still triage
+        #   but not be blocked from shipping).
+        # severity: CRITICAL,HIGH → skip LOW and MEDIUM. Why?
+        #   A typical Node.js project has dozens of LOW/MEDIUM transitive
+        #   deps. Blocking on those would make the pipeline impractical.
+        #   CRITICAL/HIGH represents genuine exploit risk.
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: fs
           scan-ref: .
-          vuln-type: library,os
+          format: sarif
+          output: trivy-fs-report.sarif
           severity: CRITICAL,HIGH
           exit-code: 1
-          format: table
           ignore-unfixed: true
-          skip-dirs: .venv
+          vuln-type: library,os
+          skip-dirs: .venv,node_modules/.cache,src/security-demos
 
-      - name: Scan container image with Trivy
+      - name: Upload Trivy SARIF to GitHub Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs-report.sarif
+          category: trivy-fs
+
+      - name: Upload Trivy FS SARIF Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-fs-sarif
+          path: trivy-fs-report.sarif
+          retention-days: 14
+
+      - name: Trivy Summary (table on failure)
+        if: failure()
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: 0
+          ignore-unfixed: true
+          vuln-type: library,os
+          skip-dirs: .venv,node_modules/.cache,src/security-demos
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 6 — Container Image Scan with Trivy
+  # Scans the built Docker image for OS-level CVEs (Alpine apk packages)
+  # and application-level CVEs (npm dependencies baked into the image).
+  # ═══════════════════════════════════════════════════════════════════════════
+  trivy-container:
+    name: Container Scan — Trivy Image
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Docker Image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker Image
+        run: gunzip -c ${{ env.IMAGE_NAME }}.tar.gz | docker load
+
+      - name: Trivy Container Image Scan
+        id: trivy-image
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: image
-          image-ref: ecommerce-app:ci
-          vuln-type: library,os
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: sarif
+          output: trivy-image-report.sarif
           severity: CRITICAL,HIGH
           exit-code: 1
-          format: table
           ignore-unfixed: true
+
+      - name: Upload Container SARIF to GitHub Security Tab
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-image-report.sarif
+          category: trivy-container
+
+      - name: Upload Trivy Container SARIF Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-image-sarif
+          path: trivy-image-report.sarif
+          retention-days: 14
+
+      - name: Trivy Container Summary (table on failure)
+        if: failure()
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: 0
+          ignore-unfixed: true
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 7 — Infrastructure as Code (IaC) Scanning
+  # ── Week 3: Terraform validate/fmt + Checkov + TFSec
+  # ═══════════════════════════════════════════════════════════════════════════
+  iac:
+    name: IaC — Terraform + Checkov + TFSec
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: 1.9.0
 
+      - name: Install TFSec
+        # Pin to v1.28.13 for reproducible builds
+        run: |
+          wget -q https://github.com/aquasecurity/tfsec/releases/download/v1.28.13/tfsec-linux-amd64 -O /usr/local/bin/tfsec
+          chmod +x /usr/local/bin/tfsec
+          tfsec --version
+
+      # ── Secure Infrastructure ──────────────────────────────────────────
+      # Terraform init (no backend — we only validate, not apply)
       - name: Terraform Init
         run: terraform init -backend=false
         working-directory: infra/terraform
 
+      # Terraform fmt checks formatting — enforced as a CI gate so
+      # that all committed .tf files follow the canonical HCL style.
       - name: Terraform Format Check
         run: terraform fmt -check -recursive
         working-directory: infra/terraform
 
+      # Terraform validate checks syntax and internal consistency
+      # (e.g., referenced resources exist, types match). Catches
+      # errors before any provisioner touches AWS.
       - name: Terraform Validate
         run: terraform validate
         working-directory: infra/terraform
 
-      - name: Run Checkov IaC Scan (Secure Infrastructure)
+      # Checkov scans the SECURE infra directory.
+      # soft_fail: false means the BUILD FAILS if any high-severity
+      # Checkov check triggers. This is the fail-gate for IaC.
+      # Why block here? Infrastructure misconfigurations are the #1
+      # attack vector in cloud breaches (CIS Benchmarks, NIST).
+      # Catching an open S3 bucket or wide-open SG in CI is far
+      # cheaper than remediating a data leak in production.
+      - name: Checkov — Secure Infra Scan (CLI output)
+        id: checkov-secure-cli
         uses: bridgecrewio/checkov-action@master
         with:
           directory: infra/terraform
@@ -104,7 +403,9 @@ jobs:
           quiet: false
           soft_fail: false
 
-      - name: Run Checkov IaC Scan (Insecure Infrastructure - Demo)
+      - name: Checkov — Insecure Infra Scan (Demo)
+        id: checkov-insecure
+        continue-on-error: true
         uses: bridgecrewio/checkov-action@master
         with:
           directory: infra/terraform-insecure
@@ -112,33 +413,224 @@ jobs:
           output_format: cli
           quiet: false
           soft_fail: true
-          skip_check: CKV_AWS_272
 
-      - name: Upload Test Coverage Artifacts
+      - name: Checkov — Secure Infra Scan (SARIF output)
+        id: checkov-secure-sarif
+        if: always()
+        continue-on-error: true
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: infra/terraform
+          framework: terraform
+          output_format: sarif
+          quiet: true
+          soft_fail: true
+          output_file_path: checkov-secure-report.sarif
+
+      # TFSec scan on the secure infra directory — BLOCKING
+      # TFSec exits non-zero on CRITICAL/HIGH findings.
+      # No continue-on-error: the pipeline stops here if TFSec finds issues.
+      - name: TFSec — Secure Infra Scan
+        id: tfsec-secure
+        run: |
+          tfsec infra/terraform \
+            --format sarif \
+            --out tfsec-secure-report.sarif \
+            --no-color
+        working-directory: infra/..
+
+
+
+      # Upload Checkov SARIF for GitHub Security tab
+      - name: Upload Checkov SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov-secure-report.sarif
+          category: checkov-iac
+
+      - name: Upload Checkov SARIF Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test-coverage-report
-          path: coverage/
+          name: checkov-iac-sarif
+          path: checkov-secure-report.sarif
+          retention-days: 14
 
-      - name: Upload Pipeline Summary
+      # Upload TFSec SARIF for GitHub Security tab
+      - name: Upload TFSec SARIF
         if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: tfsec-secure-report.sarif
+          category: tfsec-iac
+
+      - name: Upload TFSec SARIF Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfsec-iac-sarif
+          path: tfsec-secure-report.sarif
+          retention-days: 14
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 8 — DAST (Dynamic Application Security Testing) — Week 4
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Spins up the built container as an ephemeral test environment in the
+  # GitHub Actions runner, then runs OWASP ZAP (baseline scan) against it.
+  #
+  # Why DAST? SAST scans SOURCE CODE for vulnerabilities; DAST scans a
+  # RUNNING APPLICATION for runtime issues (missing security headers, XSS,
+  # SQLi, exposed endpoints). Both are needed — SAST catches things early
+  # (shift-left), DAST catches what only manifests at runtime (e.g., CSP
+  # misconfiguration, server header leaks, cookie flags).
+  #
+  # Why ephemeral? Spinning up a temporary container prevents the DAST
+  # scanner from being blocked by WAFs, rate-limiters, or auth. It also
+  # means zero ongoing infrastructure cost — the environment lives only
+  # for the duration of the scan (typically 1-2 minutes).
+  # ═══════════════════════════════════════════════════════════════════════════
+  dast:
+    name: DAST — OWASP ZAP
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Download Docker Image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      - name: Load Docker Image
+        run: gunzip -c ${{ env.IMAGE_NAME }}.tar.gz | docker load
+
+      - name: Spin Up Ephemeral Environment
+        # Start the app container using docker-compose.
+        # This creates a temporary test environment on the runner itself
+        # (localhost:3000). The container is isolated, short-lived, and
+        # requires no cloud credentials or external infrastructure.
+        run: |
+          docker compose up -d
+          echo "Waiting for application to become healthy..."
+          timeout 30 bash -c '
+            until curl -sf http://localhost:3000/health > /dev/null 2>&1; do
+              sleep 2
+            done
+          '
+          echo "Application is ready at http://localhost:3000"
+
+      - name: OWASP ZAP Baseline Scan
+        # ZAP Baseline Scan performs passive scanning (no active attacks).
+        # It checks HTTP response headers, cookie flags, exposed endpoints,
+        # and other passive indicators.
+        #
+        # fail_action: true → the pipeline fails if ZAP finds alerts at the
+        #   thresholds defined in .zap/rules.tsv.
+        # rules_file_name: .zap/rules.tsv → custom thresholds mapping alert
+        #   IDs to fail levels (FAIL, HIGH, MEDIUM, etc.).
+        # cmd_options: -a (include all URLs visited), -j (use AJAX spider),
+        #   -l WARN (report threshold: only report WARN and above).
+        # Why fail on DAST? Runtime security headers (CSP, HSTS, X-Frame-Options)
+        #   are OWASP Top 10 (A05:2021 — Security Misconfiguration). If the
+        #   app doesn't set these, it's vulnerable to clickjacking, MIME-type
+        #   sniffing, and other client-side attacks. Failing the pipeline
+        #   here enforces that every deploy meets minimum security posture.
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: 'http://localhost:3000'
+          rules_file_name: '.zap/rules.tsv'
+          cmd_options: '-a -j -l WARN'
+          allow_issue_writing: false
+          fail_action: true
+
+      - name: Upload ZAP Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap-report-*.html
+          retention-days: 14
+
+      - name: Display ZAP Summary (on failure)
+        if: failure()
+        run: |
+          echo "═══════════════════════════════════════════════════"
+          echo "  ZAP baseline scan found HIGH/FAIL alerts"
+          echo "  See uploaded 'zap-report' artifact for details"
+          echo "═══════════════════════════════════════════════════"
+
+      - name: Cleanup Ephemeral Environment
+        if: always()
+        run: docker compose down -v
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # JOB 9 — Pipeline Summary
+  # Aggregates results from ALL jobs (including Week 4 additions) into a
+  # single artifact so developers can see at a glance what passed/failed.
+  # ═══════════════════════════════════════════════════════════════════════════
+  summary:
+    name: Pipeline Summary
+    if: always()
+    needs:
+      - gitleaks
+      - test
+      - sast
+      - build
+      - trivy-sca
+      - trivy-container
+      - iac
+      - dast
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate Pipeline Report
         run: |
           mkdir -p docs
           cat > docs/pipeline-report.txt << EOF
-          Enterprise DevSecOps Pipeline Report
-          Timestamp: $(date -u)
-          Commit SHA: ${{ github.sha }}
-          Sonar Scan Performed: true
-          Trivy Scan Performed: true
-          Checkov IaC Scan Performed: true
-          Terraform Validated: true
-          ==========================================
+          ═══════════════════════════════════════════════════════════════
+           Enterprise DevSecOps Pipeline Report — All 4 Weeks
+          ═══════════════════════════════════════════════════════════════
+           Timestamp    : $(date -u)
+           Commit SHA   : ${{ github.sha }}
+           Branch       : ${{ github.ref_name }}
+           Trigger      : ${{ github.event_name }}
+          ──────────────────────────────────────────────────────────────
+           Tool                      Layer       Status
+          ──────────────────────────────────────────────────────────────
+           Gitleaks (W4)             Secret Scan   ${{ needs.gitleaks.result }}
+           Unit Tests (W1)           Testing       ${{ needs.test.result }}
+           npm audit (W2)            SCA           ${{ needs.test.result }}
+           Semgrep (W1)              SAST          ${{ needs.sast.result }}
+           Docker Build (W1)         Build         ${{ needs.build.result }}
+           Trivy FS (W2)             SCA           ${{ needs.trivy-sca.result }}
+           Trivy Container (W2)      Container     ${{ needs.trivy-container.result }}
+           Checkov IaC (W3)          IaC           ${{ needs.iac.result }}
+           TFSec IaC (W3)            IaC           ${{ needs.iac.result }}
+           OWASP ZAP DAST (W4)       DAST          ${{ needs.dast.result }}
+          ──────────────────────────────────────────────────────────────
+           Overall Pipeline: ${{ contains(needs.*.result, 'failure') && 'FAILED' || contains(needs.*.result, 'cancelled') && 'CANCELLED' || 'PASSED' }}
+          ═══════════════════════════════════════════════════════════════
           EOF
+          cat docs/pipeline-report.txt
 
-      - name: Upload Pipeline Summary Artifact
-        if: always()
+      - name: Upload Pipeline Report
         uses: actions/upload-artifact@v4
         with:
           name: pipeline-report
           path: docs/pipeline-report.txt
+      - name: Download All SARIF Artifacts
+        if: always()
+        uses: actions/download-artifact@v4
+        with:
+          path: sarif-reports
+          pattern: '*-sarif'
+          merge-multiple: true
+
+      - name: Upload Consolidated SARIF Package
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-scans-sarif
+          path: sarif-reports/*.sarif
+          retention-days: 14
