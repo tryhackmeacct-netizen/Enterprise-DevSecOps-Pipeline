@@ -1,0 +1,14 @@
+# Gitleaks configuration
+# https://github.com/gitleaks/gitleaks
+
+[allowlist]
+  # These are intentional demo credentials — whitelist them so Gitleaks
+  # doesn't flag them. In a real repo, NEVER commit real secrets.
+  paths = [
+    '''src/app.js''',
+    '''src/security-demos/.*'''
+  ]
+
+[extend]
+  # Use the default Gitleaks rules
+  useDefault = true

@@ -6,7 +6,9 @@ const server = app.listen(PORT, () => {
   console.log(`[INFO] Server running on port ${PORT}`);
 });
 
-// Graceful shutdown handler
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;
+
 const shutdown = () => {
   console.log('[INFO] Received shutdown signal. Closing server...');
   server.close(() => {
@@ -14,7 +16,6 @@ const shutdown = () => {
     process.exit(0);
   });
 
-  // Force exit if shutdown takes too long
   setTimeout(() => {
     console.error('[ERROR] Forced shutdown after timeout.');
     process.exit(1);
@@ -23,3 +24,13 @@ const shutdown = () => {
 
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
+
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] Uncaught exception:', err.message || err);
+  process.exit(1);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] Unhandled rejection:', reason);
+  process.exit(1);
+});
