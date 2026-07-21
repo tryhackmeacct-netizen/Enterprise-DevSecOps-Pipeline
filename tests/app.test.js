@@ -153,6 +153,60 @@ describe('E-commerce API Integration Tests', () => {
     });
   });
 
+  describe('POST /auth/login', () => {
+    it('should return 200 + token for valid admin credentials (DEMO)', async () => {
+      const res = await request(app)
+        .post('/auth/login')
+        .send({ username: 'admin', password: 'letmein' });
+      expect(res.statusCode).toEqual(200);
+      expect(res.body).toHaveProperty('token');
+      expect(res.body.message).toEqual('Login successful');
+    });
+
+    it('should return 401 for invalid credentials', async () => {
+      const res = await request(app)
+        .post('/auth/login')
+        .send({ username: 'admin', password: 'wrongpass' });
+      expect(res.statusCode).toEqual(401);
+      expect(res.body).toHaveProperty('error', 'Invalid credentials');
+    });
+
+    it('should return 400 when body is missing', async () => {
+      const res = await request(app)
+        .post('/auth/login')
+        .send({});
+      expect(res.statusCode).toEqual(401);
+    });
+  });
+
+  describe('POST /auth/validate', () => {
+    it('should decode a valid token', async () => {
+      const loginRes = await request(app)
+        .post('/auth/login')
+        .send({ username: 'admin', password: 'letmein' });
+      const token = loginRes.body.token;
+
+      const res = await request(app)
+        .post('/auth/validate')
+        .set('Authorization', `Bearer ${token}`);
+      expect(res.statusCode).toEqual(200);
+      expect(res.body.decoded).toHaveProperty('sub', 'admin');
+      expect(res.body.decoded).toHaveProperty('role', 'admin');
+    });
+
+    it('should return 400 when header is missing', async () => {
+      const res = await request(app).post('/auth/validate');
+      expect(res.statusCode).toEqual(400);
+    });
+
+    it('should return 401 for malformed token', async () => {
+      const res = await request(app)
+        .post('/auth/validate')
+        .set('Authorization', 'Bearer not-a-valid-token');
+      expect(res.statusCode).toEqual(401);
+    });
+  });
+
   describe('Undefined Routes', () => {
     it('should return 404 for random endpoints', async () => {
       const res = await request(app).get('/invalid-route-path');
